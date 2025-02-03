@@ -14,9 +14,6 @@ import wandb
 from pathlib import Path
 from typing import Optional, Tuple, List
 import matplotlib.pyplot as plt
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.nn.parallel import DataParallel
 import numpy as np
 
 class ActivationsDataset(Dataset):
@@ -148,99 +145,7 @@ class TopKSAE(nn.Module):
         loss.backward()
         optimizer.step()
         return loss
-        
-    def train_model(
-        self,
-        epochs: int,
-        batch_size: int,
-        model_activations_path: str,
-        checkpoint_path: str,
-        num_workers: int = 4,
-        device: str = 'cuda',
-        distributed: bool = False,
-        local_rank: int = -1
-    ):
-        """Train the autoencoder."""
-        # Initialize wandb
-        if not distributed or (distributed and local_rank == 0):
-            wandb.init(
-                project="sparse_autoencoder",
-                config={
-                    "architecture": "TopK",
-                    "input_dim": self.input_dim,
-                    "hidden_dim": self.hidden_dim,
-                    "k": self.k,
-                    "learning_rate": self.learning_rate,
-                    "scheduler": self.lr_scheduler_type,
-                    "epochs": epochs,
-                    "batch_size": batch_size
-                }
-            )
-        
-        # Setup distributed training if needed
-        if distributed:
-            if device == 'cuda':
-                torch.cuda.set_device(local_rank)
-            dist.init_process_group(backend='nccl')
-            self = DDP(self, device_ids=[local_rank])
-        elif torch.cuda.device_count() > 1 and device == 'cuda':
-            self = DataParallel(self)
-            
-        self.to(device)
-        
-        # Create dataloader
-        dataloader = self.dataloader(
-            model_activations_path,
-            batch_size,
-            num_workers,
-            distributed
-        )
-        
-        # Setup optimizer and scheduler
-        total_steps = len(dataloader) * epochs
-        optimizer, scheduler = self.get_optimizer_and_scheduler(total_steps)
-        
-        # Training loop
-        for epoch in range(epochs):
-            if distributed:
-                dataloader.sampler.set_epoch(epoch)
-                
-            epoch_losses = []
-            for batch in dataloader:
-                batch = batch.to(device)
-                loss = self.training_step(batch, optimizer)
-                epoch_losses.append(loss.item())
-                
-                if scheduler:
-                    scheduler.step()
-                    
-            # Log metrics
-            avg_loss = sum(epoch_losses) / len(epoch_losses)
-            if not distributed or (distributed and local_rank == 0):
-                wandb.log({
-                    "epoch": epoch,
-                    "loss": avg_loss,
-                    "lr": optimizer.param_groups[0]['lr']
-                })
-                
-                # Save checkpoint
-                checkpoint = {
-                    'epoch': epoch,
-                    'model_state_dict': self.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss
-                }
-                torch.save(
-                    checkpoint,
-                    os.path.join(checkpoint_path, f'checkpoint_epoch_{epoch}.pt')
-                )
-                
-        if distributed:
-            dist.destroy_process_group()
-            
-        if not distributed or (distributed and local_rank == 0):
-            wandb.finish()
-            
+    
     def get_latents(self, images: torch.Tensor) -> torch.Tensor:
         """Get latent representations for input images."""
         self.eval()

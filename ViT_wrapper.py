@@ -68,7 +68,18 @@ class ViTWrapper(nn.Module):
             with open('hf_token', 'r') as f:
                 token = f.read().strip()
             
-            self.model = CLIPModel.from_pretrained(self.config.model_name, token=token)
+            # Convert OpenAI CLIP model name to HuggingFace model name
+            # e.g., 'ViT-B/32' -> 'openai/clip-vit-base-patch32'
+            if self.config.model_name == 'ViT-B/32':
+                hf_model_name = 'openai/clip-vit-base-patch32'
+            elif self.config.model_name == 'ViT-L/14':
+                hf_model_name = 'openai/clip-vit-large-patch14'
+            elif self.config.model_name == 'ViT-L/14@336px':
+                hf_model_name = 'openai/clip-vit-large-patch14-336'
+            else:
+                raise ValueError(f"Unsupported model name: {self.config.model_name}")
+            
+            self.model = CLIPModel.from_pretrained(hf_model_name, token=token)
             self.model.to(self.config.device)
             self.visual = self.model.vision_model
         else:  # OpenCLIP
@@ -90,19 +101,19 @@ class ViTWrapper(nn.Module):
             }
         else:  # OpenCLIP
             return {
-                BlockType.ATTENTION: "self_attention",
+                BlockType.ATTENTION: "attn",  # Changed from self_attention to attn
                 BlockType.MLP: "mlp",
-                BlockType.RESIDUAL: "ln1",
-                BlockType.OUTPUT: "ln2"
-            }
-            
+                BlockType.RESIDUAL: "ln_1",  # Changed from ln1 to ln_1
+                BlockType.OUTPUT: "ln_2"  # Changed from ln2 to ln_2
+            } 
+
     def _get_block(self, block_idx: int) -> nn.Module:
         """Get transformer block by index."""
         if self.config.library == CLIPLibrary.OPENAI:
             return self.visual.transformer.resblocks[block_idx]
         else:
-            return self.visual.transformer.layers[block_idx]
-            
+            return self.visual.transformer.resblocks[block_idx] 
+
     def _hook_fn(self, name: str):
         """Factory for creating named forward hooks."""
         def hook(module, input, output):
